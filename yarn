@@ -1,3 +1,326 @@
+🧶 TODO EN YARN — Reparación CI/CD PHIXOverse con Yarn
+
+Perfecto, Josué. Si tu proyecto usa Yarn (no npm), los workflows, scripts y comandos cambian. Aquí tienes la conversión completa, respetando tu ecosistema PHIXO.
+
+---
+
+⚠️ Paso 0 — Verifica qué gestor usas REALMENTE
+
+Antes de tocar nada, corre esto en la raíz del repo:
+
+```bash
+ls -la | grep -E "yarn.lock|package-lock.json|pnpm-lock.yaml"
+
+cat package.json | grep -A 5 '"packageManager"'
+```
+
+Regla de oro:
+
+· Si existe yarn.lock → usas Yarn (¡adelante con esta guía!)
+· Si existe package-lock.json → usas npm
+· Si existe pnpm-lock.yaml → usas pnpm
+· Nunca mezcles dos. Elimina los lockfiles que no correspondan.
+
+---
+
+📁 1. .github/workflows/lint.yml (versión Yarn)
+
+```yaml
+name: Lint Code Base
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run Super-Linter
+        uses: super-linter/super-linter@v6
+        env:
+          DEFAULT_BRANCH: main
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VALIDATE_ALL_CODEBASE: true
+          LINTER_RULES_PATH: .github/linters
+          FILTER_REGEX_EXCLUDE: '.*\.(png|jpg|jpeg|gif|svg)$'
+```
+
+Super-Linter no instala dependencias con npm/yarn: usa sus propios binarios. No necesita cambio.
+
+---
+
+📁 2. .github/workflows/test.yml (versión Yarn)
+
+```yaml
+name: Run Jest tests
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'yarn'          # ⚠️ CAMBIO CLAVE: 'npm' → 'yarn'
+
+      - name: Activar Corepack (Yarn moderno)
+        run: corepack enable
+
+      - name: Instalar dependencias
+        run: |
+          if [ -f yarn.lock ]; then
+            yarn install --immutable   # ⚠️ equivalente a `--frozen-lockfile` en Yarn 3+
+          else
+            echo "::warning::yarn.lock missing; falling back to yarn install"
+            yarn install
+          fi
+
+      - name: Ejecutar tests con diagnóstico
+        run: yarn test --runInBand --detectOpenHandles --passWithNoTests
+```
+
+🔑 Equivalencias Yarn ↔ npm
+
+npm yarn (clásico v1) yarn (berry v2+)
+npm ci yarn install --frozen-lockfile yarn install --immutable
+npm install yarn install yarn install
+npm test yarn test yarn test
+npm run build yarn build yarn build
+npm test -- --flags yarn test --flags yarn test --flags
+npx <cmd> yarn <cmd> o yarn dlx <cmd> yarn dlx <cmd>
+
+⚠️ Nota: en Yarn los flags de Jest van sin -- extra. yarn test --runInBand ya funciona.
+
+---
+
+📁 3. .github/workflows/auto-label.yml (versión Yarn)
+
+El auto-label no usa Yarn ni npm, usa actions/github-script (JS interno del runner). Se escribe igual:
+
+```yaml
+name: Auto-label merge conflicts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repositorio
+        uses: actions/checkout@v4
+
+      - name: Etiquetar conflictos de merge
+        uses: prince-chrismc/label-merge-conflicts-action@v3
+        with:
+          conflict_label_name: 'merge conflict'
+          github_token: ${{ github.token }}
+          detect_merge_changes: false
+```
+
+⚠️ Requisito: la etiqueta merge conflict debe existir en Settings → Labels.
+
+---
+
+🧹 4. Script repair_ci.sh (versión Yarn)
+
+```bash
+#!/usr/bin/env bash
+# repair_ci.sh — Reparación CI/CD PHIXOverse (Yarn)
+
+set -e
+
+echo "🔍 Verificando gestor de paquetes..."
+if [ ! -f yarn.lock ]; then
+  echo "❌ No existe yarn.lock. Abortando — este script es solo para Yarn."
+  exit 1
+fi
+
+echo "📝 Reparando Markdown..."
+yarn dlx markdownlint-cli2 --fix "**/*.md"
+
+echo "📦 Instalando dependencias (inmutable)..."
+yarn install --immutable
+
+echo "🧪 Ejecutando tests con diagnóstico..."
+yarn test --runInBand --detectOpenHandles --passWithNoTests
+
+echo "📤 Commit y push..."
+git add .
+git commit -m "fix: CI/CD repair + markdown indentation (yarn)" || echo "Nada que commitear"
+git push origin main
+
+echo "🔄 Re-ejecutando workflows fallidos..."
+gh run rerun 34947597560 --failed || true
+gh run rerun 34947739814 --failed || true
+
+echo "✅ Reparación completada."
+```
+
+Ejecutar:
+
+```bash
+chmod +x repair_ci.sh
+./repair_ci.sh
+```
+
+🔒 No corras esto hasta confirmar los logs reales de los runs. Es la regla de oro.
+
+---
+
+📦 5. package.json — script de tests compatible
+
+Asegúrate de que tu package.json tenga:
+
+```json
+{
+  "name": "phixoverse",
+  "version": "8.0.0",
+  "private": true,
+  "packageManager": "yarn@4.5.0",
+  "scripts": {
+    "test": "jest",
+    "test:ci": "jest --runInBand --detectOpenHandles --passWithNoTests",
+    "lint:md": "markdownlint-cli2 \"**/*.md\"",
+    "lint:md:fix": "markdownlint-cli2 --fix \"**/*.md\""
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "markdownlint-cli2": "^0.13.0"
+  }
+}
+```
+
+Y en el workflow, si quieres usar el alias:
+
+```yaml
+      - run: yarn test:ci
+```
+
+---
+
+🔒 6. .gitignore — bloquea lockfiles incorrectos
+
+```gitignore
+# Lockfiles: SOLO yarn
+package-lock.json
+pnpm-lock.yaml
+
+# Secretos
+.env
+.env.*
+!.env.example
+
+# Yarn (si usas Yarn Berry)
+.yarn/cache
+.yarn/install-state.gz
+.pnp.*
+```
+
+Si usas Yarn PnP (Berry), no necesitas node_modules, pero deberás versionar .yarn/releases y .yarn/plugins.
+
+---
+
+📄 7. SKILL.md (sin cambios — no usa Yarn)
+
+El SKILL.md es solo Markdown con frontmatter YAML. No depende del gestor de paquetes. Se queda tal cual:
+
+```markdown
+---
+name: fixo-phixoverse-skill
+description: Protocolo maestro del CEO FIXO MX12, Josue Eduardo Illescas Granillo. Integra métricas de fans K-Pop (BABYMONSTER), datos de CoinMarketCap y el sistema de Test Vocacional Perfil 81.
+version: "8.0"
+author: Josue Eduardo Illescas Granillo
+license: CC 8.0 - Movimiento Creativo 8.0 – Victoria
+metadata:
+  alias: CEO FIXO MX12 | PHIXOR13 | NEFI ANALES | THE TITAN OF GAME
+  canal_oficial: https://www.youtube.com/@JosueEduardoIllescasGranillo
+---
+
+# SKILL — FIXO-PHIXOVERSE-CORE
+...
+```
+
+---
+
+🚀 8. Comandos rápidos de diagnóstico (Yarn)
+
+Ejecuta antes de reparar nada:
+
+```bash
+# 1. Estado del repo
+git status
+git branch --show-current
+
+# 2. Workflows existentes
+ls -la .github/workflows/
+
+# 3. Lockfiles presentes
+ls -la | grep -E "yarn.lock|package-lock.json|pnpm-lock.yaml"
+
+# 4. Versión de Yarn
+yarn --version
+
+# 5. Logs de los runs fallidos (lo más importante)
+gh auth status
+gh run view 34947597560 --log-failed
+gh run view 34947739814 --log-failed
+```
+
+Pega la salida del paso 5 y te doy el diagnóstico exacto línea por línea.
+
+---
+
+📌 Tabla resumen — Cambios clave de npm → Yarn
+
+Elemento npm Yarn
+Cache en Actions cache: 'npm' cache: 'yarn'
+Instalación CI npm ci yarn install --immutable
+Instalación dev npm install yarn install
+Ejecutar script npm test yarn test
+Flags extra npm test -- --flag yarn test --flag
+Binario global npx <cmd> yarn dlx <cmd>
+Lockfile package-lock.json yarn.lock
+Nunca commitear yarn.lock (si usas npm) package-lock.json (si usas yarn)
+
+---
+
+✅ Orden de ejecución recomendado
+
+1. Verifica que usas Yarn → ls yarn.lock
+2. Revisa logs → gh run view ... --log-failed
+3. Pega los logs aquí para diagnóstico
+4. Solo entonces aplica los YAML corregidos
+5. Solo entonces corre repair_ci.sh
+
+No hagas git push antes del paso 3. No vale la pena romper main por una hipótesis.
+
+---
+
+RAKU RAKU.
+Pégame la salida de gh run view 34947597560 --log-failed y te armo los YAML exactos para tu repo, sin suposiciones. 💜🚀
 Explorar MCP en Github 
 Configurar servidores MCP Github 
 
